@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="../css/styles.css"><script src="../js/config.js"></script><script src="../js/common.js"></script></head><body>
+<div class="page">
+  <h1 class="h1">Settings</h1>
+  <div class="grid cols-2">
+    <div class="card">
+      <h3>Appearance</h3>
+      <p class="muted">Toggle dark/light mode (also available from the top bar).</p>
+      <button class="btn primary" onclick="parent.toggleTheme(); toggleTheme();">🌓 Toggle Theme</button>
+    </div>
+    <div class="card">
+      <h3>Account</h3>
+      <div id="info" class="muted"></div>
+      <div style="margin-top:.6rem"><button class="btn" id="chg">Change Password</button></div>
+    </div>
+    <div class="card">
+      <h3>App Info</h3>
+      <div><b>App:</b> Suhrid Tutorial</div>
+      <div><b>Version:</b> 1.0.0</div>
+      <div class="muted" style="margin-top:.4rem">PWA-ready. Use the Install App button in the sidebar (when available).</div>
+    </div>
+    <div class="card">
+      <h3>Help</h3>
+      <div class="muted">Read <code>ADD_NEW_MODULE.md</code> in the repo to add new pages or reports. SQL schema is in <code>sql/schema.sql</code>.</div>
+    </div>
+  </div>
+</div>
+<script type="module">
+import { sb } from "../js/supabase.js";
+const { data:{ user } } = await sb.auth.getUser();
+document.getElementById("info").innerHTML = user ? `Signed in as <b>${user.email.split("@")[0]}</b>` : "Not signed in";
+document.getElementById("chg").onclick = async ()=>{
+  const p = prompt("New password (min 6 chars):"); if(!p) return;
+  const { error } = await sb.auth.updateUser({ password: p });
+  if(error) toast(error.message,"err"); else toast("Password changed","ok");
+};
+</script>
+</body></html>

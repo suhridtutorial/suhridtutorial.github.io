@@ -1,0 +1,137 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="../css/styles.css"><script src="../js/config.js"></script><script src="../js/common.js"></script></head><body>
+<div class="page">
+  <h1 class="h1">Fee Collection</h1>
+  <div class="card">
+    <div class="grid cols-2">
+      <div>
+        <label>Student</label>
+        <select id="stu" class="input"><option value="">— Select —</option></select>
+        <div class="muted" id="stuInfo" style="margin-top:.4rem;font-size:12px"></div>
+      </div>
+      <div>
+        <label>Payment Date</label>
+        <input id="payDate" class="input" type="date">
+      </div>
+      <div>
+        <label>Start From (month/year)</label>
+        <div class="row">
+          <select id="m" class="input"></select>
+          <input id="y" class="input" type="number" min="2000" max="2100">
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:.3rem">Advance amount auto-allocates to consecutive unpaid months from here.</div>
+      </div>
+      <div>
+        <label>Amount Paid</label>
+        <input id="amt" class="input" type="number" min="0" step="0.01" placeholder="e.g. 3000 for 3 months × 1000">
+      </div>
+      <div>
+        <label>Discount (one-time, applied to first month)</label>
+        <input id="disc" class="input" type="number" min="0" step="0.01" value="0">
+      </div>
+      <div>
+        <label>Note</label>
+        <input id="note" class="input" placeholder="Cash / UPI / etc.">
+      </div>
+    </div>
+    <div class="right" style="margin-top:1rem">
+      <button class="btn" id="preview">Preview Allocation</button>
+      <button class="btn primary" id="save" disabled>Save Payment</button>
+    </div>
+  </div>
+
+  <div style="height:1rem"></div>
+  <div class="card" id="allocCard" style="display:none">
+    <h3>Allocation Preview</h3>
+    <table class="table" id="allocTbl">
+      <thead><tr><th>Period</th><th>Monthly Fee</th><th>Allocated</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted" id="leftover" style="margin-top:.6rem"></div>
+  </div>
+
+  <div style="height:1rem"></div>
+  <div class="card">
+    <h3>Recent Collections</h3>
+    <div style="overflow:auto"><table class="table" id="recent">
+      <thead><tr><th>Date</th><th>Student</th><th>Period</th><th>Fee</th><th>Paid</th><th>Discount</th><th>Note</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+</div>
+
+<script type="module">
+import { sb } from "../js/supabase.js";
+import { allocateAdvance } from "../js/fees-lib.js";
+
+document.getElementById("m").innerHTML = Array.from({length:12},(_,i)=>`<option value="${i+1}">${monthName(i+1)}</option>`).join("");
+const ymNow = thisYM();
+document.getElementById("m").value = ymNow.m;
+document.getElementById("y").value = ymNow.y;
+document.getElementById("payDate").value = todayISO();
+
+const { data: students } = await sb.from("students").select("*").order("name");
+document.getElementById("stu").innerHTML += students.map(s=>`<option value="${s.student_id}">${s.student_code} — ${s.name} (${s.class})</option>`).join("");
+
+let plan = null, currentStudent = null;
+
+document.getElementById("stu").onchange = e=>{
+  currentStudent = students.find(s=>s.student_id===e.target.value) || null;
+  document.getElementById("stuInfo").textContent = currentStudent ? `Current monthly fee: ${fmtINR(currentStudent.monthly_fee)} · Admitted: ${currentStudent.admission_date} · Status: ${currentStudent.status}` : "";
+  plan = null; document.getElementById("allocCard").style.display="none"; document.getElementById("save").disabled = true;
+};
+
+document.getElementById("preview").onclick = async ()=>{
+  if(!currentStudent) return toast("Pick a student","err");
+  const amt = Number(document.getElementById("amt").value||0);
+  if(amt<=0) return toast("Enter amount","err");
+  const startY = parseInt(document.getElementById("y").value);
+  const startM = parseInt(document.getElementById("m").value);
+  const disc = Number(document.getElementById("disc").value||0);
+  // Reduce required for first month by discount
+  const { allocations, leftover } = await allocateAdvance(currentStudent, amt + disc, startY, startM);
+  if (allocations.length && disc>0){
+    // mark discount on first allocated month
+    allocations[0].discount = Math.min(disc, allocations[0].fee);
+    allocations[0].amount = Math.max(allocations[0].amount - allocations[0].discount, 0);
+  }
+  plan = allocations;
+  const tb = document.querySelector("#allocTbl tbody");
+  tb.innerHTML = allocations.map(a=>`<tr><td>${monthName(a.month)} ${a.year}</td><td>${fmtINR(a.fee)}</td><td>${fmtINR(a.amount)}${a.discount?` <span class="badge warn">−${fmtINR(a.discount)} disc</span>`:""}</td></tr>`).join("");
+  document.getElementById("leftover").textContent = leftover>0 ? `Unallocated remainder: ${fmtINR(leftover)} (not saved — increase periods or reduce amount)` : "All allocated.";
+  document.getElementById("allocCard").style.display="block";
+  document.getElementById("save").disabled = allocations.length===0;
+};
+
+document.getElementById("save").onclick = async ()=>{
+  if(!plan || !plan.length) return;
+  const note = document.getElementById("note").value;
+  const date = document.getElementById("payDate").value || todayISO();
+  const rows = plan.map(a=>({
+    student_id: currentStudent.student_id,
+    fee_month: a.month, fee_year: a.year,
+    monthly_fee_snapshot: a.fee,
+    amount_paid: a.amount,
+    discount: a.discount || 0,
+    collection_date: date,
+    payment_note: note
+  }));
+  const { error } = await sb.from("fee_collections").insert(rows);
+  if(error) return toast(error.message,"err");
+  toast(`Saved ${rows.length} month(s)`,"ok");
+  document.getElementById("amt").value=""; document.getElementById("disc").value="0";
+  document.getElementById("note").value=""; document.getElementById("allocCard").style.display="none";
+  document.getElementById("save").disabled=true; loadRecent();
+};
+
+async function loadRecent(){
+  const { data } = await sb.from("fee_collections").select("*").order("created_at",{ascending:false}).limit(30);
+  const nameOf = id => (students.find(s=>s.student_id===id)||{}).name || "—";
+  document.querySelector("#recent tbody").innerHTML = (data||[]).map(p=>`<tr>
+    <td>${p.collection_date}</td><td>${nameOf(p.student_id)}</td>
+    <td>${monthName(p.fee_month)} ${p.fee_year}</td>
+    <td>${fmtINR(p.monthly_fee_snapshot)}</td><td>${fmtINR(p.amount_paid)}</td>
+    <td>${fmtINR(p.discount)}</td><td>${p.payment_note||""}</td></tr>`).join("") || `<tr><td colspan=7 class=muted style="text-align:center;padding:1rem">No payments yet</td></tr>`;
+}
+loadRecent();
+</script>
+</body></html>

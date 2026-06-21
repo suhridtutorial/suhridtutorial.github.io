@@ -1,0 +1,114 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="../css/styles.css"><script src="../js/config.js"></script><script src="../js/common.js"></script></head><body>
+<div class="page">
+  <div class="toolbar">
+    <h1 class="h1" id="ttl" style="margin:0">Student Profile</h1>
+    <span class="spacer" style="flex:1"></span>
+    <button class="btn" id="rev">＋ Fee Revision</button>
+    <button class="btn" id="pdf">PDF</button>
+    <button class="btn" onclick="window.print()">Print</button>
+  </div>
+  <div class="grid cols-2">
+    <div class="card"><h3>Student Details</h3><div id="det"></div></div>
+    <div class="card"><h3>Summary</h3><div id="sum"></div></div>
+  </div>
+  <div style="height:1rem"></div>
+  <div class="card">
+    <h3>Fee Revision History</h3>
+    <table class="table" id="rt"><thead><tr><th>Effective From</th><th>Old Fee</th><th>New Fee</th><th>Recorded</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div style="height:1rem"></div>
+  <div class="card">
+    <h3>Month-wise Ledger</h3>
+    <div style="overflow:auto"><table class="table" id="lt"><thead><tr><th>Period</th><th>Monthly Fee</th><th>Paid</th><th>Discount</th><th>Due</th><th>Pay Date</th><th>Note</th></tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+
+<div class="modal-back" id="mb"><form class="modal" id="frm">
+  <h2>New Fee Revision</h2>
+  <div class="grid cols-2">
+    <div><label>New Monthly Fee</label><input class="input" name="new_fee" type="number" min="0" step="0.01" required></div>
+    <div><label>Effective Month</label><select class="input" name="m" required></select></div>
+    <div><label>Effective Year</label><input class="input" name="y" type="number" min="2000" max="2100" required></div>
+  </div>
+  <div class="right" style="margin-top:1rem">
+    <button class="btn" type="button" id="cancel">Cancel</button>
+    <button class="btn primary" type="submit">Save</button>
+  </div>
+</form></div>
+
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+<script type="module">
+import { sb } from "../js/supabase.js";
+import { ledger } from "../js/fees-lib.js";
+
+const id = (location.hash||"").slice(1);
+if(!id){ document.body.innerHTML = "<div class='page muted'>No student selected.</div>"; throw 0; }
+
+const { data: student } = await sb.from("students").select("*").eq("student_id",id).maybeSingle();
+if(!student){ document.body.innerHTML="<div class='page muted'>Not found.</div>"; throw 0; }
+
+document.getElementById("ttl").textContent = `${student.name} · ${student.student_code}`;
+document.getElementById("det").innerHTML = `
+  <div><b>Name:</b> ${student.name}</div>
+  <div><b>Class:</b> ${student.class} · <b>Board:</b> ${student.board}</div>
+  <div><b>Mobile:</b> ${student.mobile||"—"}</div>
+  <div><b>Admission:</b> ${student.admission_date}</div>
+  <div><b>Current Fee:</b> ${fmtINR(student.monthly_fee)}</div>
+  <div><b>Status:</b> ${student.status}</div>
+  <div><b>Remarks:</b> ${student.remarks||"—"}</div>`;
+
+const { data: revs } = await sb.from("fee_history").select("*")
+  .eq("student_id",id).order("effective_from_year").order("effective_from_month");
+document.querySelector("#rt tbody").innerHTML = (revs||[]).map(r=>`<tr>
+  <td>${monthName(r.effective_from_month)} ${r.effective_from_year}</td>
+  <td>${fmtINR(r.old_fee)}</td><td>${fmtINR(r.new_fee)}</td><td>${r.created_at.slice(0,10)}</td></tr>`).join("") || `<tr><td colspan=4 class=muted>No revisions</td></tr>`;
+
+const L = await ledger(student);
+const tp = L.reduce((a,x)=>a+x.paid,0), td = L.reduce((a,x)=>a+x.discount,0), to = L.reduce((a,x)=>a+x.due,0);
+document.getElementById("sum").innerHTML = `
+  <div><b>Total Paid:</b> ${fmtINR(tp)}</div>
+  <div><b>Total Discount:</b> ${fmtINR(td)}</div>
+  <div><b>Total Outstanding:</b> ${fmtINR(to)}</div>
+  <div><b>Months tracked:</b> ${L.length}</div>`;
+document.querySelector("#lt tbody").innerHTML = L.map(r=>{
+  const cls = r.due>0 ? "warn" : "ok";
+  return `<tr><td>${monthName(r.month)} ${r.year}</td><td>${fmtINR(r.fee)}</td>
+    <td>${fmtINR(r.paid)}</td><td>${fmtINR(r.discount)}</td>
+    <td><span class="badge ${cls}">${fmtINR(r.due)}</span></td>
+    <td>${r.date||""}</td><td>${r.note||""}</td></tr>`;
+}).join("");
+
+// Revision modal
+const frm = document.getElementById("frm");
+frm.elements.m.innerHTML = Array.from({length:12},(_,i)=>`<option value="${i+1}">${monthName(i+1)}</option>`).join("");
+const ymN = thisYM(); frm.elements.m.value = ymN.m; frm.elements.y.value = ymN.y;
+document.getElementById("rev").onclick = ()=> document.getElementById("mb").classList.add("open");
+document.getElementById("cancel").onclick = ()=> document.getElementById("mb").classList.remove("open");
+frm.onsubmit = async e=>{
+  e.preventDefault();
+  const fd = Object.fromEntries(new FormData(frm).entries());
+  const newFee = Number(fd.new_fee);
+  // 1) record history
+  const { error: e1 } = await sb.from("fee_history").insert({
+    student_id:id, old_fee: student.monthly_fee, new_fee:newFee,
+    effective_from_month: Number(fd.m), effective_from_year: Number(fd.y)
+  });
+  if(e1) return toast(e1.message,"err");
+  // 2) update student.monthly_fee to latest
+  await sb.from("students").update({monthly_fee:newFee}).eq("student_id",id);
+  toast("Revision saved","ok");
+  location.reload();
+};
+
+document.getElementById("pdf").onclick = ()=>{
+  const { jsPDF } = window.jspdf; const doc = new jsPDF();
+  doc.text("Suhrid Tutorial — "+student.name+" ("+student.student_code+")",14,14);
+  doc.text(`Class ${student.class} · ${student.board} · Status ${student.status}`,14,22);
+  doc.autoTable({startY:28, head:[["Period","Fee","Paid","Discount","Due","Date","Note"]],
+    body: L.map(r=>[monthName(r.month)+" "+r.year, r.fee, r.paid, r.discount, r.due, r.date||"", r.note||""])});
+  doc.text(`Total Paid ${fmtINR(tp)} · Discount ${fmtINR(td)} · Outstanding ${fmtINR(to)}`,14,doc.lastAutoTable.finalY+10);
+  doc.save(student.student_code+"_profile.pdf");
+};
+</script>
+</body></html>

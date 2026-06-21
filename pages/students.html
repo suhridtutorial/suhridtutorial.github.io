@@ -1,0 +1,154 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="../css/styles.css"><script src="../js/config.js"></script><script src="../js/common.js"></script></head><body>
+<div class="page">
+  <h1 class="h1">Students</h1>
+  <div class="toolbar">
+    <input id="q" class="input grow" placeholder="Search name / code / mobile">
+    <select id="fClass" class="input"><option value="">All classes</option></select>
+    <select id="fBoard" class="input"><option value="">All boards</option><option>CBSE</option><option>ICSE</option><option>WB</option></select>
+    <select id="fStatus" class="input"><option value="">All status</option><option>Active</option><option>Inactive</option><option>Left</option></select>
+    <button class="btn primary" id="addBtn">＋ Add Student</button>
+    <button class="btn" id="xlsBtn">Excel</button>
+    <button class="btn" id="pdfBtn">PDF</button>
+  </div>
+  <div class="card" style="padding:0;overflow:auto">
+    <table class="table" id="tbl">
+      <thead><tr><th>Code</th><th>Name</th><th>Class</th><th>Board</th><th>Mobile</th><th>Fee</th><th>Status</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="toolbar" style="justify-content:flex-end;margin-top:.6rem">
+    <button class="btn" id="prev">‹ Prev</button>
+    <span class="pill" id="pg"></span>
+    <button class="btn" id="next">Next ›</button>
+  </div>
+</div>
+
+<!-- Add/Edit modal -->
+<div class="modal-back" id="mb"><form class="modal" id="frm">
+  <h2 id="mTitle">Add Student</h2>
+  <div class="grid cols-2">
+    <div><label>Name</label><input class="input" name="name" required></div>
+    <div><label>Mobile</label><input class="input" name="mobile"></div>
+    <div><label>Class</label><select class="input" name="class" required>
+      <option>Class 5</option><option>Class 6</option><option>Class 7</option><option>Class 8</option>
+      <option>Class 9</option><option>Class 10</option><option>Class 11</option><option>Class 12</option><option>NEET</option>
+    </select></div>
+    <div><label>Board</label><select class="input" name="board" required>
+      <option>CBSE</option><option>ICSE</option><option>WB</option>
+    </select></div>
+    <div><label>Monthly Fee</label><input class="input" name="monthly_fee" type="number" min="0" step="0.01" required></div>
+    <div><label>Admission Date</label><input class="input" name="admission_date" type="date" required></div>
+    <div><label>Status</label><select class="input" name="status"><option>Active</option><option>Inactive</option><option>Left</option></select></div>
+    <div><label>Remarks</label><input class="input" name="remarks"></div>
+  </div>
+  <div class="right" style="margin-top:1rem">
+    <button class="btn" type="button" id="cancelBtn">Cancel</button>
+    <button class="btn primary" type="submit">Save</button>
+  </div>
+</form></div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+<script type="module">
+import { sb } from "../js/supabase.js";
+const CLASSES = ["Class 5","Class 6","Class 7","Class 8","Class 9","Class 10","Class 11","Class 12","NEET"];
+document.getElementById("fClass").innerHTML += CLASSES.map(c=>`<option>${c}</option>`).join("");
+
+let all=[], view=[], page=1, PER=20, editing=null;
+
+async function load(){
+  const { data, error } = await sb.from("students").select("*").order("created_at",{ascending:false});
+  if(error) return toast(error.message,"err");
+  all = data || []; render();
+}
+function render(){
+  const q = document.getElementById("q").value.toLowerCase();
+  const c = document.getElementById("fClass").value;
+  const b = document.getElementById("fBoard").value;
+  const s = document.getElementById("fStatus").value;
+  view = all.filter(x =>
+    (!q || (x.name+" "+x.student_code+" "+(x.mobile||"")).toLowerCase().includes(q))
+    && (!c || x.class===c) && (!b || x.board===b) && (!s || x.status===s));
+  const total = view.length, pages = Math.max(1, Math.ceil(total/PER));
+  if (page>pages) page=pages;
+  const slice = view.slice((page-1)*PER, page*PER);
+  document.querySelector("#tbl tbody").innerHTML = slice.map(x=>{
+    const bd = x.status==="Active"?"ok":x.status==="Inactive"?"warn":"bad";
+    return `<tr>
+      <td><a href="#" data-open="${x.student_id}">${x.student_code}</a></td>
+      <td>${x.name}</td><td>${x.class}</td><td>${x.board}</td><td>${x.mobile||""}</td>
+      <td>${fmtINR(x.monthly_fee)}</td>
+      <td><span class="badge ${bd}">${x.status}</span></td>
+      <td class="right">
+        <button class="btn ghost" data-edit="${x.student_id}">Edit</button>
+        <button class="btn danger" data-del="${x.student_id}">Del</button>
+      </td>
+    </tr>`;
+  }).join("") || `<tr><td colspan=8 class="muted" style="padding:1rem;text-align:center">No students</td></tr>`;
+  document.getElementById("pg").textContent = `Page ${page} / ${pages} · ${total} total`;
+}
+["q","fClass","fBoard","fStatus"].forEach(id=> document.getElementById(id).oninput = ()=>{page=1; render();});
+document.getElementById("prev").onclick = ()=>{ if(page>1){page--; render();} };
+document.getElementById("next").onclick = ()=>{ page++; render(); };
+
+const mb = document.getElementById("mb"), frm = document.getElementById("frm");
+function openModal(s){
+  editing = s||null;
+  document.getElementById("mTitle").textContent = s? "Edit Student":"Add Student";
+  frm.reset();
+  if(s) Object.keys(s).forEach(k=>{ if(frm.elements[k]) frm.elements[k].value = s[k] ?? ""; });
+  if(!s) frm.elements.admission_date.value = todayISO();
+  mb.classList.add("open");
+}
+document.getElementById("addBtn").onclick = ()=> openModal(null);
+document.getElementById("cancelBtn").onclick = ()=> mb.classList.remove("open");
+mb.onclick = e=>{ if(e.target===mb) mb.classList.remove("open"); };
+
+frm.onsubmit = async e=>{
+  e.preventDefault();
+  const fd = Object.fromEntries(new FormData(frm).entries());
+  fd.monthly_fee = Number(fd.monthly_fee);
+  if(editing){
+    const { error } = await sb.from("students").update(fd).eq("student_id", editing.student_id);
+    if(error) return toast(error.message,"err");
+    toast("Updated","ok");
+  } else {
+    const { error } = await sb.from("students").insert(fd);
+    if(error) return toast(error.message,"err");
+    toast("Added","ok");
+  }
+  mb.classList.remove("open"); load();
+};
+
+document.addEventListener("click", async e=>{
+  const ed = e.target.dataset.edit, dl = e.target.dataset.del, op = e.target.dataset.open;
+  if(ed) openModal(all.find(x=>x.student_id===ed));
+  if(dl){
+    if(!confirm("Delete this student and all related records?")) return;
+    const { error } = await sb.from("students").delete().eq("student_id", dl);
+    if(error) return toast(error.message,"err");
+    toast("Deleted","ok"); load();
+  }
+  if(op){
+    e.preventDefault();
+    parent.postMessage({type:"navigate", page:"pages/student_profile.html#"+op, label:"Student Profile"},"*");
+  }
+});
+
+document.getElementById("xlsBtn").onclick = ()=>{
+  const ws = XLSX.utils.json_to_sheet(view.map(({created_at,updated_at,student_id,...r})=>r));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Students");
+  XLSX.writeFile(wb, "students.xlsx");
+};
+document.getElementById("pdfBtn").onclick = ()=>{
+  const { jsPDF } = window.jspdf; const doc = new jsPDF();
+  doc.text("Suhrid Tutorial — Students", 14, 14);
+  doc.autoTable({ startY:20, head:[["Code","Name","Class","Board","Mobile","Fee","Status"]],
+    body: view.map(s=>[s.student_code,s.name,s.class,s.board,s.mobile||"",s.monthly_fee,s.status]) });
+  doc.save("students.pdf");
+};
+
+load();
+</script>
+</body></html>

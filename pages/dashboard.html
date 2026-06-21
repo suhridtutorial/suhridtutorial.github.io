@@ -1,0 +1,81 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="../css/styles.css"><script src="../js/config.js"></script><script src="../js/common.js"></script></head><body>
+<div class="page">
+  <h1 class="h1">Dashboard</h1>
+  <div class="grid cols-4" id="cards"></div>
+  <div style="height:1rem"></div>
+  <div class="grid cols-2">
+    <div class="card"><h3>Monthly Collection (last 12 months)</h3><canvas id="chTrend" height="160"></canvas></div>
+    <div class="card"><h3>Class-wise Students</h3><canvas id="chClass" height="160"></canvas></div>
+  </div>
+  <div style="height:1rem"></div>
+  <div class="grid cols-2">
+    <div class="card"><h3>Recent Payments</h3><table class="table" id="tblPay"><thead><tr><th>Date</th><th>Student</th><th>Period</th><th>Paid</th></tr></thead><tbody></tbody></table></div>
+    <div class="card"><h3>Recent Admissions</h3><table class="table" id="tblAdm"><thead><tr><th>Date</th><th>Name</th><th>Class</th><th>Fee</th></tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script type="module">
+import { sb } from "../js/supabase.js";
+import { ledger } from "../js/fees-lib.js";
+
+const { y, m } = thisYM();
+const { data: students } = await sb.from("students").select("*");
+const { data: collections } = await sb.from("fee_collections").select("*");
+
+const counts = { Active:0, Inactive:0, Left:0 };
+students.forEach(s=> counts[s.status] = (counts[s.status]||0)+1);
+
+// Current month totals + outstanding (compute via ledger for accuracy)
+let curPayable=0, curPaid=0, curDisc=0, curDue=0, totalOut=0;
+for (const s of students){
+  const rows = await ledger(s);
+  rows.forEach(r=>{
+    totalOut += r.due;
+    if (r.year===y && r.month===m){
+      curPayable += r.fee; curPaid += r.paid; curDisc += r.discount; curDue += r.due;
+    }
+  });
+}
+
+const cards = [
+  ["Total Students", students.length],
+  ["Active", counts.Active||0],
+  ["Inactive", counts.Inactive||0],
+  ["Left", counts.Left||0],
+  ["Current Month Payable", fmtINR(curPayable)],
+  ["Current Month Paid", fmtINR(curPaid)],
+  ["Current Month Discount", fmtINR(curDisc)],
+  ["Current Month Due", fmtINR(curDue)],
+  ["Total Outstanding", fmtINR(totalOut)],
+];
+document.getElementById("cards").innerHTML = cards.map(([h,v])=>
+  `<div class="card"><h3>${h}</h3><div class="v">${v}</div></div>`).join("");
+
+// Trend chart — last 12 months from collections
+const labels = [], data=[];
+for (let i=11;i>=0;i--){
+  const d = new Date(y, m-1-i, 1);
+  const yy=d.getFullYear(), mm=d.getMonth()+1;
+  labels.push(monthName(mm)+" "+String(yy).slice(2));
+  const tot = collections.filter(c=>c.fee_year===yy && c.fee_month===mm).reduce((a,c)=>a+Number(c.amount_paid),0);
+  data.push(tot);
+}
+new Chart(document.getElementById("chTrend"),{type:"line",data:{labels,datasets:[{label:"Paid",data,borderColor:"#10b981",backgroundColor:"rgba(16,185,129,.2)",tension:.35,fill:true}]},options:{plugins:{legend:{display:false}}}});
+
+// Class chart
+const classMap = {};
+students.forEach(s=> classMap[s.class] = (classMap[s.class]||0)+1);
+new Chart(document.getElementById("chClass"),{type:"bar",data:{labels:Object.keys(classMap),datasets:[{label:"Students",data:Object.values(classMap),backgroundColor:"#10b981"}]},options:{plugins:{legend:{display:false}}}});
+
+// Recent payments
+const recentPay = [...collections].sort((a,b)=>b.collection_date.localeCompare(a.collection_date)).slice(0,8);
+const nameOf = id => (students.find(s=>s.student_id===id)||{}).name || "—";
+document.querySelector("#tblPay tbody").innerHTML = recentPay.map(p=>
+  `<tr><td>${p.collection_date}</td><td>${nameOf(p.student_id)}</td><td>${monthName(p.fee_month)} ${p.fee_year}</td><td>${fmtINR(p.amount_paid)}</td></tr>`).join("") || `<tr><td colspan=4 class=muted>No payments yet</td></tr>`;
+
+// Recent admissions
+const recentAdm = [...students].sort((a,b)=>b.admission_date.localeCompare(a.admission_date)).slice(0,8);
+document.querySelector("#tblAdm tbody").innerHTML = recentAdm.map(s=>
+  `<tr><td>${s.admission_date}</td><td>${s.name}</td><td>${s.class}</td><td>${fmtINR(s.monthly_fee)}</td></tr>`).join("") || `<tr><td colspan=4 class=muted>No students yet</td></tr>`;
+</script>
+</body></html>

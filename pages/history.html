@@ -1,0 +1,96 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="../css/styles.css"><script src="../js/config.js"></script><script src="../js/common.js"></script></head><body>
+<div class="page">
+  <h1 class="h1">Payment History</h1>
+  <div class="card">
+    <div class="grid cols-4">
+      <div><label>From</label><input id="from" type="date" class="input"></div>
+      <div><label>To</label><input id="to" type="date" class="input"></div>
+      <div><label>Student</label><select id="stu" class="input"><option value="">All</option></select></div>
+      <div><label>Class</label><select id="cls" class="input"><option value="">All</option></select></div>
+      <div><label>Board</label><select id="brd" class="input"><option value="">All</option><option>CBSE</option><option>ICSE</option><option>WB</option></select></div>
+      <div><label>Status</label><select id="st" class="input"><option value="">All</option><option>Active</option><option>Inactive</option><option>Left</option></select></div>
+      <div><label>Fee Month</label><select id="fm" class="input"><option value="">All</option></select></div>
+      <div><label>Fee Year</label><input id="fy" type="number" class="input" placeholder="e.g. 2026"></div>
+    </div>
+    <div class="right" style="margin-top:1rem">
+      <button class="btn" id="apply">Apply</button>
+      <button class="btn" id="xls">Excel</button>
+      <button class="btn" id="pdf">PDF</button>
+      <button class="btn" onclick="window.print()">Print</button>
+    </div>
+  </div>
+  <div style="height:1rem"></div>
+  <div class="card" style="overflow:auto">
+    <table class="table" id="tbl">
+      <thead><tr><th>Date</th><th>Student</th><th>Class</th><th>Period</th><th>Fee</th><th>Paid</th><th>Discount</th><th>Note</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted" id="sum" style="margin-top:.6rem"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+<script type="module">
+import { sb } from "../js/supabase.js";
+const CLASSES = ["Class 5","Class 6","Class 7","Class 8","Class 9","Class 10","Class 11","Class 12","NEET"];
+document.getElementById("cls").innerHTML += CLASSES.map(c=>`<option>${c}</option>`).join("");
+document.getElementById("fm").innerHTML += Array.from({length:12},(_,i)=>`<option value="${i+1}">${monthName(i+1)}</option>`).join("");
+
+const { data: students } = await sb.from("students").select("*").order("name");
+const sMap = Object.fromEntries(students.map(s=>[s.student_id,s]));
+document.getElementById("stu").innerHTML += students.map(s=>`<option value="${s.student_id}">${s.student_code} — ${s.name}</option>`).join("");
+
+let rows = [];
+
+async function run(){
+  let q = sb.from("fee_collections").select("*").order("collection_date",{ascending:false});
+  const f = document.getElementById("from").value, t = document.getElementById("to").value;
+  if(f) q = q.gte("collection_date", f);
+  if(t) q = q.lte("collection_date", t);
+  const stu = document.getElementById("stu").value; if(stu) q = q.eq("student_id", stu);
+  const fm = document.getElementById("fm").value; if(fm) q = q.eq("fee_month", Number(fm));
+  const fy = document.getElementById("fy").value; if(fy) q = q.eq("fee_year", Number(fy));
+  const { data, error } = await q;
+  if(error) return toast(error.message,"err");
+  const cls = document.getElementById("cls").value;
+  const brd = document.getElementById("brd").value;
+  const st  = document.getElementById("st").value;
+  rows = (data||[]).filter(p=>{
+    const s = sMap[p.student_id]; if(!s) return false;
+    return (!cls||s.class===cls)&&(!brd||s.board===brd)&&(!st||s.status===st);
+  });
+  document.querySelector("#tbl tbody").innerHTML = rows.map(p=>{
+    const s = sMap[p.student_id]||{};
+    return `<tr><td>${p.collection_date}</td><td>${s.name||"—"}</td><td>${s.class||""}</td>
+      <td>${monthName(p.fee_month)} ${p.fee_year}</td>
+      <td>${fmtINR(p.monthly_fee_snapshot)}</td><td>${fmtINR(p.amount_paid)}</td>
+      <td>${fmtINR(p.discount)}</td><td>${p.payment_note||""}</td></tr>`;
+  }).join("") || `<tr><td colspan=8 class=muted style="text-align:center;padding:1rem">No records</td></tr>`;
+  const tp = rows.reduce((a,p)=>a+Number(p.amount_paid),0);
+  const td = rows.reduce((a,p)=>a+Number(p.discount),0);
+  document.getElementById("sum").textContent = `${rows.length} records · Paid ${fmtINR(tp)} · Discount ${fmtINR(td)}`;
+}
+document.getElementById("apply").onclick = run;
+
+document.getElementById("xls").onclick = ()=>{
+  const ws = XLSX.utils.json_to_sheet(rows.map(p=>({
+    Date:p.collection_date, Student:(sMap[p.student_id]||{}).name, Class:(sMap[p.student_id]||{}).class,
+    Period:monthName(p.fee_month)+" "+p.fee_year, Fee:p.monthly_fee_snapshot, Paid:p.amount_paid,
+    Discount:p.discount, Note:p.payment_note||""
+  })));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"History");
+  XLSX.writeFile(wb,"history.xlsx");
+};
+document.getElementById("pdf").onclick = ()=>{
+  const { jsPDF } = window.jspdf; const doc = new jsPDF();
+  doc.text("Suhrid Tutorial — Payment History",14,14);
+  doc.autoTable({startY:20, head:[["Date","Student","Class","Period","Fee","Paid","Discount","Note"]],
+    body: rows.map(p=>[p.collection_date,(sMap[p.student_id]||{}).name,(sMap[p.student_id]||{}).class,
+      monthName(p.fee_month)+" "+p.fee_year,p.monthly_fee_snapshot,p.amount_paid,p.discount,p.payment_note||""])});
+  doc.save("history.pdf");
+};
+run();
+</script>
+</body></html>
