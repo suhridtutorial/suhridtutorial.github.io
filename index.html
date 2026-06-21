@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login · Suhrid Tutorial</title>
+<link rel="icon" href="icons/favicon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#10b981">
+<link rel="stylesheet" href="css/styles.css">
+<script src="js/config.js"></script>
+<script src="js/common.js"></script>
+</head><body>
+<div class="login-wrap">
+  <form id="loginForm" class="card login-card">
+    <div class="logo">
+      <img src="icons/icon-192.png" alt="">
+      <div><h1>Suhrid Tutorial</h1><small>Tuition Management System</small></div>
+    </div>
+    <label>User ID</label>
+    <input id="uid" class="input" required autocomplete="username" placeholder="admin">
+    <div style="height:.6rem"></div>
+    <label>Password</label>
+    <input id="pwd" class="input" type="password" required autocomplete="current-password">
+    <div style="height:1rem"></div>
+    <button class="btn primary" style="width:100%;justify-content:center">Sign in</button>
+    <hr class="hr">
+    <small class="muted">Default admin: create user <b>admin@suhrid.local</b> in Supabase, then log in here as <b>admin</b>.</small>
+  </form>
+</div>
+<script type="module">
+import { sb } from "./js/supabase.js";
+const f = document.getElementById("loginForm");
+const { data:{ session } } = await sb.auth.getSession();
+if (session) location.replace("app.html");
+f.addEventListener("submit", async e=>{
+  e.preventDefault();
+  const uid = document.getElementById("uid").value.trim();
+  const pwd = document.getElementById("pwd").value;
+  const email = uid.includes("@") ? uid : `${uid}@${window.AUTH_DOMAIN}`;
+  const { error } = await sb.auth.signInWithPassword({ email, password: pwd });
+  if (error){ toast(error.message, "err"); return; }
+  location.replace("app.html");
+});
+</script>
+</body></html>

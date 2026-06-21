@@ -1,0 +1,79 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Suhrid Tutorial</title>
+<link rel="icon" href="icons/favicon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#10b981">
+<link rel="stylesheet" href="css/styles.css">
+<script src="js/config.js"></script>
+<script src="js/common.js"></script>
+</head><body>
+<div class="app">
+  <aside id="side" class="sidebar">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="">
+      <div><b>Suhrid Tutorial</b><small>Admin Console</small></div>
+    </div>
+    <a class="navitem" data-page="pages/dashboard.html"><span class="ic">📊</span> Dashboard</a>
+    <a class="navitem" data-page="pages/students.html"><span class="ic">👥</span> Students</a>
+    <a class="navitem" data-page="pages/fee_collection.html"><span class="ic">💰</span> Fee Collection</a>
+    <a class="navitem" data-page="pages/history.html"><span class="ic">🗂️</span> History</a>
+    <a class="navitem" data-page="pages/reports.html"><span class="ic">📈</span> Reports</a>
+    <a class="navitem" data-page="pages/settings.html"><span class="ic">⚙️</span> Settings</a>
+    <div style="flex:1"></div>
+    <button class="btn ghost" id="installBtn" style="display:none">📲 Install App</button>
+    <button class="btn danger" id="logoutBtn">Logout</button>
+  </aside>
+  <header class="topbar">
+    <button class="btn ghost hamburger" id="hamb">☰</button>
+    <span class="title" id="pageTitle">Dashboard</span>
+    <span class="spacer"></span>
+    <button class="btn ghost" onclick="toggleTheme()" title="Toggle theme">🌓</button>
+    <span class="pill" id="userPill"></span>
+  </header>
+  <main class="main"><iframe id="frame" src="pages/dashboard.html" title="Module"></iframe></main>
+</div>
+
+<script type="module">
+import { sb, requireAuth, logout } from "./js/supabase.js";
+const session = await requireAuth();
+document.getElementById("userPill").textContent = session.user.email.split("@")[0];
+document.getElementById("logoutBtn").onclick = logout;
+document.getElementById("hamb").onclick = ()=> document.getElementById("side").classList.toggle("open");
+
+const frame = document.getElementById("frame");
+const items = document.querySelectorAll(".navitem[data-page]");
+function nav(page, label){
+  frame.src = page;
+  document.getElementById("pageTitle").textContent = label;
+  items.forEach(i=>i.classList.toggle("active", i.dataset.page===page));
+  if (window.innerWidth < 880) document.getElementById("side").classList.remove("open");
+  history.replaceState(null,"","#"+page);
+}
+items.forEach(i=> i.onclick = ()=> nav(i.dataset.page, i.textContent.trim()));
+// initial
+const start = location.hash ? location.hash.slice(1) : "pages/dashboard.html";
+const startItem = [...items].find(i=>i.dataset.page===start) || items[0];
+nav(startItem.dataset.page, startItem.textContent.trim());
+
+// allow iframes to navigate parent (e.g. "open student profile")
+window.addEventListener("message", e=>{
+  if(e.data && e.data.type==="navigate") nav(e.data.page, e.data.label||"");
+});
+
+// PWA install
+let deferred;
+window.addEventListener("beforeinstallprompt", e=>{
+  e.preventDefault(); deferred = e;
+  document.getElementById("installBtn").style.display="inline-flex";
+});
+document.getElementById("installBtn").onclick = async ()=>{
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice; deferred = null;
+  document.getElementById("installBtn").style.display="none";
+};
+
+// service worker
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
+</script>
+</body></html>
